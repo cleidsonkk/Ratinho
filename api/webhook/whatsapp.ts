@@ -4,7 +4,6 @@ import { config as appConfig } from "../../src/config.js";
 import { log } from "../../src/logger.js";
 import { prepareInboundForProcessing } from "../../src/modules/inboundHandler.js";
 import { processValidationJob } from "../../src/modules/processor.js";
-import { authorizeRequest } from "../../src/modules/security.js";
 import { parseInboundWhatsAppMessage } from "../../src/modules/webhookParser.js";
 
 export const config = {
@@ -98,17 +97,6 @@ export default async function handler(req: any, res: any): Promise<void> {
 
   if (req.method !== "POST") {
     res.status(405).json({ ok: false, error: "method_not_allowed" });
-    return;
-  }
-
-  const authorized = await authorizeRequest({
-    ip: String(req.headers["x-forwarded-for"] ?? req.socket?.remoteAddress ?? "").split(",")[0].trim(),
-    userAgent: String(req.headers["user-agent"] ?? ""),
-    getHeader: (name) => req.headers[name.toLowerCase()] as string | undefined
-  });
-
-  if (!authorized) {
-    res.status(401).json({ ok: false, error: "unauthorized" });
     return;
   }
 
