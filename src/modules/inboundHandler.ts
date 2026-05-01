@@ -3,15 +3,18 @@ import { config } from "../config.js";
 import { log } from "../logger.js";
 import type { InboundMessage, ValidationJob } from "../types.js";
 import { handleAdminNotificationCommand } from "./adminNotificationCommand.js";
+import { authorizeInboundPhone } from "./authorizedPhones.js";
 import { notifyAdminContactUpdate, notifyAdminExtractionFailure, notifyAdminSafely } from "./adminNotifier.js";
 import { getCustomerCreditSummary } from "./credit.js";
 import { formatPhoneNumber, isTelegramContactMessage, upsertCustomerProfileFromInbound, upsertTelegramContact } from "./customerProfile.js";
 import {
+  buildBlockedPhoneMessage,
   buildExtractionFailureMessage,
   buildMultipleCodesMessage,
   buildTelegramContactRegisteredMessage,
   buildTelegramContactRejectedMessage,
-  buildTelegramWelcomeMessage
+  buildTelegramWelcomeMessage,
+  buildUnauthorizedPhoneMessage
 } from "./messageBuilder.js";
 import { requestTelegramContact, sendText } from "./notifier.js";
 import { createValidationJob, hasDatabase, recordExtractionFailure } from "./persistence.js";
@@ -62,6 +65,20 @@ export async function prepareInboundForProcessing(inbound: InboundMessage): Prom
   }
 
   const codes = extractTicketCodes(inbound.mensagem);
+
+  if (codes.length > 0) {
+    const authorization = await authorizeInboundPhone(inbound);
+
+    if (!authorization.allowed) {
+      await sendText(
+        inbound.channel,
+        inbound.recipientId,
+        authorization.reason === "blocked" ? buildBlockedPhoneMessage() : buildUnauthorizedPhoneMessage()
+      );
+
+      return { kind: "ignored", reason: authorization.reason };
+    }
+  }
 
   if (codes.length > 1) {
     const summary = hasDatabase()

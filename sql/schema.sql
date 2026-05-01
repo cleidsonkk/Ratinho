@@ -134,3 +134,14 @@ CREATE TABLE IF NOT EXISTS admin_notification_targets (
 
 CREATE INDEX IF NOT EXISTS admin_notification_targets_enabled_idx
   ON admin_notification_targets (channel, enabled, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS authorized_phone_ids (
+  phone text PRIMARY KEY,
+  name text,
+  blocked boolean NOT NULL DEFAULT false,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS authorized_phone_ids_blocked_updated_idx
+  ON authorized_phone_ids (blocked, updated_at DESC);

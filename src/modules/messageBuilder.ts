@@ -173,3 +173,16 @@ export function buildTelegramContactRejectedMessage(): string {
     "Depois envie 1 código de bilhete por vez."
   ].join("\n");
 }
+export function buildUnauthorizedPhoneMessage(): string {
+  return [
+    "Seu numero ainda nao esta cadastrado para confirmar bilhetes neste atendimento.",
+    "Solicite ao administrador a liberacao do seu celular antes de enviar novos codigos."
+  ].join("\n");
+}
+
+export function buildBlockedPhoneMessage(): string {
+  return [
+    "Seu cadastro esta bloqueado no momento para confirmacao de bilhetes.",
+    "Entre em contato com o administrador para solicitar a liberacao do seu acesso."
+  ].join("\n");
+}

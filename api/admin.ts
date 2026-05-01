@@ -1,6 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { config } from "../src/config.js";
 import { isAdminRequestAuthorized, verifyAdminCredentials } from "../src/modules/adminAuth.js";
+import {
+  type AuthorizedPhoneRecord,
+  deleteAuthorizedPhone,
+  listAuthorizedPhones,
+  setAuthorizedPhoneBlockedState,
+  upsertAuthorizedPhone
+} from "../src/modules/authorizedPhones.js";
 import { clearOperationalData, deleteValidationJobById } from "../src/modules/adminCleanup.js";
 import { countAdminNotificationTargets } from "../src/modules/adminNotificationTargets.js";
 import { sendAdminTestNotification } from "../src/modules/adminNotifier.js";
@@ -12,6 +19,7 @@ import {
   loadAdminDashboardData
 } from "../src/modules/adminDashboard.js";
 import { formatMoney as formatCreditMoney, parseMoneyInput, recordCustomerCreditPayment, setCustomerCreditLimit } from "../src/modules/credit.js";
+import { formatPhoneNumber } from "../src/modules/customerProfile.js";
 import { recordSecurityEvent } from "../src/modules/persistence.js";
 
 const STATUSES = [
@@ -159,6 +167,62 @@ async function handleAdminAction(req: any, res: any): Promise<void> {
           ? "Nenhum WhatsApp administrativo configurado. Defina ADMIN_WHATSAPP_NUMBERS no ambiente."
           : "Nenhum Telegram administrativo cadastrado. Envie /admin sua-senha no bot."
     );
+    return;
+  }
+
+  if (action === "upsert_authorized_phone") {
+    try {
+      const result = await upsertAuthorizedPhone({
+        phone: form.get("authorizedPhone") ?? "",
+        name: form.get("authorizedName")
+      });
+
+      await recordAdminCleanupEvent(req, result.created ? "admin_create_authorized_phone" : "admin_update_authorized_phone", {
+        phone: result.record.phone,
+        name: result.record.name,
+        blocked: result.record.blocked
+      });
+      redirectToAdmin(
+        res,
+        result.created
+          ? `Celular ${result.record.phone} cadastrado com sucesso.`
+          : `Cadastro do celular ${result.record.phone} atualizado com sucesso.`
+      );
+    } catch (error) {
+      res.status(400).send(error instanceof Error ? error.message : "Celular invalido.");
+    }
+    return;
+  }
+
+  if (action === "block_authorized_phone" || action === "unblock_authorized_phone") {
+    const phone = form.get("authorizedPhone") ?? "";
+    const blocked = action === "block_authorized_phone";
+    const updated = await setAuthorizedPhoneBlockedState(phone, blocked);
+
+    await recordAdminCleanupEvent(req, blocked ? "admin_block_authorized_phone" : "admin_unblock_authorized_phone", {
+      phone,
+      updated
+    });
+    redirectToAdmin(
+      res,
+      updated
+        ? blocked
+          ? "Celular bloqueado com sucesso."
+          : "Celular liberado com sucesso."
+        : "Cadastro nao encontrado."
+    );
+    return;
+  }
+
+  if (action === "delete_authorized_phone") {
+    if (!requireAdminPassword(form, res)) {
+      return;
+    }
+
+    const phone = form.get("authorizedPhone") ?? "";
+    const deleted = await deleteAuthorizedPhone(phone);
+    await recordAdminCleanupEvent(req, "admin_delete_authorized_phone", { phone, deleted });
+    redirectToAdmin(res, deleted ? "Cadastro apagado com sucesso." : "Cadastro nao encontrado.");
     return;
   }
 
@@ -615,6 +679,71 @@ function renderAdminNotificationsPanel(targetCount: number): string {
   `;
 }
 
+function renderAuthorizedPhoneRows(records: AuthorizedPhoneRecord[]): string {
+  if (records.length === 0) {
+    return `<div class="empty-block">Nenhum celular autorizado cadastrado ate o momento.</div>`;
+  }
+
+  return records.map((record) => `
+    <article class="authorized-card">
+      <div class="authorized-card-head">
+        <div>
+          <strong>${escapeHtml(record.name ?? "Cliente autorizado")}</strong>
+          <code>${escapeHtml(formatPhoneNumber(record.phone) ?? record.phone)}</code>
+          <small>Atualizado em ${escapeHtml(formatDate(record.updatedAt))}</small>
+        </div>
+        <span class="pill ${record.blocked ? "bad" : "ok"}">${record.blocked ? "Bloqueado" : "Liberado"}</span>
+      </div>
+      <div class="authorized-actions">
+        <form method="post" action="/api/admin">
+          <input type="hidden" name="action" value="${record.blocked ? "unblock_authorized_phone" : "block_authorized_phone"}">
+          <input type="hidden" name="authorizedPhone" value="${escapeHtml(record.phone)}">
+          <button type="submit" class="${record.blocked ? "button secondary" : ""}">${record.blocked ? "Liberar" : "Bloquear"}</button>
+        </form>
+        <form method="post" action="/api/admin" onsubmit="return confirm('Apagar este cadastro autorizado?');">
+          <input type="hidden" name="action" value="delete_authorized_phone">
+          <input type="hidden" name="authorizedPhone" value="${escapeHtml(record.phone)}">
+          <label>
+            <span>Senha do administrador</span>
+            <input type="password" name="adminPassword" autocomplete="current-password" placeholder="Senha para apagar" required>
+          </label>
+          <button type="submit" class="danger-button">Apagar cadastro</button>
+        </form>
+      </div>
+    </article>
+  `).join("");
+}
+
+function renderAuthorizedPhonesPanel(records: AuthorizedPhoneRecord[]): string {
+  return `
+    <section class="panel authorized-panel" aria-label="IDs autorizados por celular">
+      <div class="section-heading">
+        <div>
+          <span class="eyebrow">Controle de acesso</span>
+          <h2>IDs autorizados por celular</h2>
+          <p class="muted">
+            Somente os celulares cadastrados abaixo poderao enviar codigo e confirmar bilhetes. O sistema aceita automaticamente as variacoes com e sem nono digito no Brasil.
+          </p>
+          <small>${formatInteger(records.length)} cadastro(s) autorizado(s).</small>
+        </div>
+      </div>
+      <form method="post" action="/api/admin" class="authorized-create-form">
+        <input type="hidden" name="action" value="upsert_authorized_phone">
+        <label>
+          <span>Celular / ID</span>
+          <input name="authorizedPhone" inputmode="numeric" placeholder="Ex.: 5579999105302" required>
+        </label>
+        <label>
+          <span>Nome do cliente</span>
+          <input name="authorizedName" placeholder="Nome opcional para identificar no painel">
+        </label>
+        <button type="submit">Cadastrar celular</button>
+      </form>
+      <div class="authorized-list">${renderAuthorizedPhoneRows(records)}</div>
+    </section>
+  `;
+}
+
 function renderCleanupPanel(data: AdminDashboardData): string {
   return `
     <section class="panel cleanup-panel" aria-label="Limpeza operacional">
@@ -638,7 +767,11 @@ function renderCleanupPanel(data: AdminDashboardData): string {
   `;
 }
 
-function renderHtml(data: AdminDashboardData, options: { notice: string; adminNotificationTargets: number }): string {
+function renderHtml(data: AdminDashboardData, options: {
+  notice: string;
+  adminNotificationTargets: number;
+  authorizedPhones: AuthorizedPhoneRecord[];
+}): string {
   const averageTicket = data.totals.tickets > 0 ? data.totals.amount / data.totals.tickets : 0;
   const lastUpdate = formatDate(data.generatedAt);
   const dataUrl = buildAdminUrl(data, { format: "json" });
@@ -774,6 +907,54 @@ function renderHtml(data: AdminDashboardData, options: { notice: string; adminNo
     .notify-panel p {
       max-width: 760px;
       margin-bottom: 6px;
+    }
+    .authorized-panel {
+      display: grid;
+      gap: 14px;
+      margin-bottom: 14px;
+      border-color: #c9d7ef;
+      background: #fbfcff;
+    }
+    .authorized-create-form {
+      display: grid;
+      grid-template-columns: minmax(220px, 320px) minmax(220px, 1fr) auto;
+      gap: 10px;
+      align-items: end;
+    }
+    .authorized-list {
+      display: grid;
+      gap: 10px;
+    }
+    .authorized-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      padding: 12px;
+    }
+    .authorized-card-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+      margin-bottom: 10px;
+    }
+    .authorized-card-head strong,
+    .authorized-card-head code,
+    .authorized-card-head small {
+      display: block;
+    }
+    .authorized-card-head code {
+      margin-top: 4px;
+    }
+    .authorized-actions {
+      display: grid;
+      grid-template-columns: minmax(160px, 220px) minmax(260px, 360px);
+      gap: 10px;
+      align-items: end;
+    }
+    .authorized-actions form {
+      display: grid;
+      gap: 8px;
     }
     .notify-form {
       display: grid;
@@ -1096,6 +1277,8 @@ function renderHtml(data: AdminDashboardData, options: { notice: string; adminNo
       .filters { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .metrics { grid-template-columns: repeat(3, minmax(150px, 1fr)); }
       .ticket-grid { grid-template-columns: repeat(2, minmax(150px, 1fr)); }
+      .authorized-create-form,
+      .authorized-actions { grid-template-columns: 1fr; }
     }
     @media (max-width: 820px) {
       .page { width: min(100% - 16px, 720px); padding-top: 14px; padding-bottom: 26px; }
@@ -1103,7 +1286,7 @@ function renderHtml(data: AdminDashboardData, options: { notice: string; adminNo
       .top-actions { justify-content: flex-start; width: 100%; }
       .live, .logout { flex: 1 1 130px; }
       h1 { font-size: 22px; }
-      .filters, .notify-panel, .cleanup-panel, .metrics, .split, .ticket-grid, .message-grid { grid-template-columns: 1fr; }
+      .filters, .notify-panel, .cleanup-panel, .metrics, .split, .ticket-grid, .message-grid, .authorized-create-form, .authorized-actions { grid-template-columns: 1fr; }
       .filters {
         gap: 8px;
         padding: 10px;
@@ -1206,6 +1389,7 @@ function renderHtml(data: AdminDashboardData, options: { notice: string; adminNo
     ${renderFilters(data)}
     ${renderNotice(options.notice)}
     ${renderAdminNotificationsPanel(options.adminNotificationTargets)}
+    ${renderAuthorizedPhonesPanel(options.authorizedPhones)}
     ${renderCleanupPanel(data)}
 
     <section class="metrics" aria-label="Indicadores">
@@ -1354,9 +1538,10 @@ export default async function handler(req: any, res: any): Promise<void> {
     }
 
     const adminNotificationTargets = await countAdminNotificationTargets();
+    const authorizedPhones = await listAuthorizedPhones();
 
     res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.status(200).send(renderHtml(data, { notice, adminNotificationTargets }));
+    res.status(200).send(renderHtml(data, { notice, adminNotificationTargets, authorizedPhones }));
   } catch (error) {
     console.error(error);
     res.status(500).send("Erro ao carregar o painel administrativo.");

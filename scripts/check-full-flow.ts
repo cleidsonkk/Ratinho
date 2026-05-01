@@ -6,12 +6,15 @@ import {
 } from "../src/modules/credit.js";
 import { formatPhoneNumber, isTelegramContactMessage } from "../src/modules/customerProfile.js";
 import {
+  buildBlockedPhoneMessage,
   buildCustomerMessage,
   buildExtractionFailureMessage,
   buildMultipleCodesMessage,
   buildTelegramContactRegisteredMessage,
-  buildTelegramWelcomeMessage
+  buildTelegramWelcomeMessage,
+  buildUnauthorizedPhoneMessage
 } from "../src/modules/messageBuilder.js";
+import { buildAuthorizedPhoneVariants, canonicalizeAuthorizedPhone } from "../src/modules/authorizedPhones.js";
 import { parseAdminNotificationCommand } from "../src/modules/adminNotificationCommand.js";
 import { parseInboundTelegramMessage } from "../src/modules/telegramWebhookParser.js";
 import { extractTicketCode, extractTicketCodes } from "../src/modules/ticketExtractor.js";
@@ -130,6 +133,11 @@ assert(metaInbound, "Meta WhatsApp payload must be parsed");
 assertEqual(metaInbound?.recipientId, "5579999105302", "Meta WhatsApp sender must be used as recipient");
 assertEqual(metaInbound?.mensagem, "confirma pra mim V072ZHQWNZV9", "Meta WhatsApp text body must be parsed");
 assertEqual(metaInbound?.externalMessageId, "wamid.test", "Meta WhatsApp message id must be parsed");
+assertEqual(canonicalizeAuthorizedPhone("557999105302"), "5579999105302", "whatsapp phone without ninth digit must canonicalize to stored brazilian mobile");
+assertEqual(canonicalizeAuthorizedPhone("79999105302"), "5579999105302", "local brazilian mobile must canonicalize with country code");
+assertEqual(buildAuthorizedPhoneVariants("5579999105302").includes("557999105302"), true, "authorized phone variants must include whatsapp payload without ninth digit");
+assertIncludes(buildUnauthorizedPhoneMessage(), "nao esta cadastrado", "unauthorized response must explain missing registration");
+assertIncludes(buildBlockedPhoneMessage(), "bloqueado", "blocked response must explain access block");
 
 const multiCodes = extractTicketCodes("V072ZHQWNZV9 e G3J4IZPP4J80");
 assertEqual(multiCodes.length, 2, "multiple codes must be detected");
